@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 悬浮卡片
 // @namespace    http://tampermonkey.net/
-// @version      19.9.3
+// @version      19.9.4
 // @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
 // @author       YourName
 // @match        *://*/*
@@ -399,8 +399,9 @@
         // 第三条通道：主动轮询 GM 存储。
         // Tampermonkey 的跨标签值变更通知有同步延迟（后台任务多时可达数秒），
         // 非 opener 页面又收不到 postMessage，只靠通知会卡顿。
-        // 卡片存在期间每 150ms 直接读一次最新值，前台定时器不受节流，
-        // 配合 handleRelay 的时间戳去重，与另两条通道互不冲突、谁先到用谁。
+        // 卡片存在期间每 60ms 直接读一次最新值（与工作页 60ms 写入限频对齐），
+        // 前台定时器不受节流，配合 handleRelay 的时间戳去重，
+        // 与另两条通道互不冲突、谁先到用谁。
         function startRelayPolling() {
             if (relayPollTimer || typeof GM_getValue !== 'function') return;
             relayPollTimer = setInterval(() => {
@@ -411,7 +412,7 @@
                     const d = JSON.parse(raw);
                     if (d && d.source === RELAY_SOURCE) handleRelay(d);
                 } catch(e) {}
-            }, 150);
+            }, 60);
         }
 
         // ---------- 触发翻译 ----------
@@ -617,10 +618,12 @@
         function relayMessage(payload) {
             const full = Object.assign({ source: RELAY_SOURCE, ts: nextTs() }, payload);
 
-            // 通道1：GM 存储通知（流式期间限频 200ms，完成/出错立即写）
+            // 通道1：GM 存储通知（流式期间限频 60ms，对齐 postMessage 的
+            // 实时感；完成/出错立即写）。60ms 是 A 页逐字与 B 页颗粒度
+            // 一致的关键——限频太松会让非 opener 页面"一段一段"出字。
             try {
                 const now = Date.now();
-                if (payload.done || payload.error || now - lastStorageWrite > 200) {
+                if (payload.done || payload.error || now - lastStorageWrite > 60) {
                     lastStorageWrite = now;
                     GM_setValue(RELAY_KEY, JSON.stringify(full));
                 }
