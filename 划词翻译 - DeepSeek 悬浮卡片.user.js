@@ -1,0 +1,786 @@
+// ==UserScript==
+// @name         划词翻译 - DeepSeek 悬浮卡片
+// @namespace    http://tampermonkey.net/
+// @version      19.9.1
+// @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
+// @author       YourName
+// @match        *://*/*
+// @match        https://chat.deepseek.com/*
+// @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addValueChangeListener
+// ==/UserScript==
+
+/*
+ * ⚠️ 使用说明：
+ * 1. 本脚本是「窗口版」的替代方案，采用页面内悬浮卡片显示译文。
+ *    安装/启用本脚本时，请先停用旧的「划词翻译 - DeepSeek 自动发送」，
+ *    否则划词时会出现两个🌐按钮。
+ *
+ * 2. 架构演进史（踩坑记录）：
+ *    v19.8.1 工作窗口完全移出屏幕 → Chrome"遮挡节流"冻结页面，回传卡死；
+ *    v19.8.2 工作窗口留 50px 小角 → 依旧被节流（用户点回页面看卡片时
+ *            主窗口盖住工作窗口，照样触发遮挡）；
+ *    v19.9   改用【后台标签页】当工作页——浏览器对后台标签从不冻结
+ *            JS（只节流计时器），这是所有网页自动化依赖的可靠行为。
+ *    另外：曾想用隐藏 iframe 当工作页，但 DeepSeek 响应头带
+ *            CSP: frame-ancestors 'none'，官方封死了 iframe 嵌入。
+ *
+ * 3. 工作方式：
+ *    - 点击🌐 → 当前页面弹出悬浮卡片；
+ *    - 首次使用会打开一个 DeepSeek 标签页（标题显示"翻译助手"），
+ *      它会常驻后台复用：之后的翻译直接走后台，零弹窗零闪烁；
+ *    - 工作页把流式译文通过 GM 存储跨标签通知 + postMessage 双通道
+ *      实时回传给卡片；
+ *    - 工作页空闲 3 分钟自动关闭，下次划词自动重开；
+ *    - 卡片左上角 ⠿ 可拖动，拖后位置固定；✕ 关闭卡片。
+ */
+
+(function() {
+    'use strict';
+
+    const CONFIG = {
+        targetLang: '中文',
+        deepseekUrl: 'https://chat.deepseek.com/',
+        buttonDelay: 300,
+        cardWidth: 320,
+        cardMaxHeight: 480,
+        maxTextLength: 999999,
+        offsetX: 20,   // 卡片水平偏移量（右侧空间不够则向左）
+        offsetY: 20,   // 卡片垂直偏移量（始终向下）
+        doneIdleMs: 1500,    // 输出停止多久判定为"完成"
+        workerName: 'ds_translate_worker',
+        workerIdleCloseMs: 180000,   // 工作页空闲多久后自动关闭（3分钟）
+    };
+
+    const isDeepSeek = location.href.startsWith('https://chat.deepseek.com/');
+    const RELAY_SOURCE = 'ds-translate-card-relay';
+    const TASK_KEY = 'ds_card_task';
+    const RELAY_KEY = 'ds_card_relay';
+
+    function log(msg, data) {
+        console.log(`[划词翻译-卡片] ${msg}`, data || '');
+    }
+
+    // ============================================================
+    //  普通网页部分（划词按钮 + 悬浮卡片）
+    // ============================================================
+    if (!isDeepSeek) {
+        GM_addStyle(`
+            #translate-popup-btn {
+                position: fixed;
+                z-index: 2147483000;
+                background: #4D6BFE;
+                color: white;
+                border: none;
+                border-radius: 50%;
+                padding: 6px 6px;
+                font-size: 18px;
+                cursor: pointer;
+                box-shadow: 0 4px 12px rgba(77, 107, 254, 0.4);
+                transition: all 0.2s ease;
+                display: none;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                user-select: none;
+                pointer-events: auto;
+                line-height: 1;
+                width: 32px;
+                height: 32px;
+                align-items: center;
+                justify-content: center;
+            }
+            #translate-popup-btn:hover {
+                background: #3B5DE7;
+                transform: scale(1.1);
+                box-shadow: 0 6px 20px rgba(77, 107, 254, 0.5);
+            }
+
+            /* ---------- 悬浮卡片（固定暗色主题：纯黑底白字） ---------- */
+            #ds-translate-card {
+                position: fixed;
+                z-index: 2147483000;
+                width: ${CONFIG.cardWidth}px;
+                max-height: ${CONFIG.cardMaxHeight}px;
+                background: #000000;
+                border: 1px solid #2a2d33;
+                border-radius: 10px;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.55);
+                box-sizing: border-box;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+                font-size: 14px;
+                line-height: 1.7;
+            }
+            #ds-translate-card-scroll {
+                max-height: ${CONFIG.cardMaxHeight - 2}px;
+                overflow-y: auto;
+                padding: 14px 16px 16px;
+                box-sizing: border-box;
+                border-radius: 10px;
+            }
+            #ds-translate-card-scroll, #ds-translate-card-scroll * {
+                color: #f3f5f7;
+            }
+            #ds-translate-card-scroll a {
+                color: #6ea8ff !important;
+                text-decoration: underline;
+            }
+            #ds-translate-card-scroll code,
+            #ds-translate-card-scroll pre {
+                background: rgba(255, 255, 255, 0.08) !important;
+            }
+            #ds-translate-card-scroll table,
+            #ds-translate-card-scroll th,
+            #ds-translate-card-scroll td {
+                border-color: rgba(255, 255, 255, 0.25) !important;
+            }
+            #ds-translate-card-close {
+                position: absolute;
+                top: 6px;
+                right: 8px;
+                width: 24px;
+                height: 24px;
+                line-height: 24px;
+                text-align: center;
+                border-radius: 50%;
+                background: rgba(255, 255, 255, 0.12);
+                color: #c9ccd4;
+                cursor: pointer;
+                font-size: 13px;
+                user-select: none;
+                z-index: 1;
+            }
+            #ds-translate-card-close:hover {
+                background: rgba(255, 255, 255, 0.25);
+            }
+            #ds-translate-card-drag {
+                position: absolute;
+                top: 6px;
+                left: 8px;
+                width: 24px;
+                height: 24px;
+                line-height: 24px;
+                text-align: center;
+                border-radius: 50%;
+                background: rgba(255, 255, 255, 0.12);
+                color: #c9ccd4;
+                cursor: move;
+                font-size: 12px;
+                user-select: none;
+                z-index: 1;
+            }
+            #ds-translate-card-drag:hover {
+                background: rgba(255, 255, 255, 0.25);
+            }
+            #ds-translate-card-status {
+                color: #8a8f99 !important;
+                font-size: 13px;
+            }
+            #ds-translate-card-status .dots::after {
+                content: '';
+                animation: ds-card-dots 1.2s steps(4, end) infinite;
+            }
+            @keyframes ds-card-dots {
+                0%  { content: ''; }
+                25% { content: '.'; }
+                50% { content: '..'; }
+                75% { content: '...'; }
+            }
+        `);
+
+        let selectedText = '';
+        let popupBtn = null;
+        let hideTimer = null;
+        let currentMouseX = 0;
+        let currentMouseY = 0;
+        let card = null;
+        let cardScroll = null;
+        let cardStatus = null;
+        let cardBody = null;
+        let cardAnchorX = 0;
+        let cardAnchorY = 0;
+        let cardTimeoutTimer = null;
+        let cardPinned = false;   // 用户拖动后位置固定，不再自动跟随
+        let workerWin = null;     // 后台工作标签页引用
+
+        function createPopupButton() {
+            if (popupBtn) return;
+            popupBtn = document.createElement('button');
+            popupBtn.id = 'translate-popup-btn';
+            popupBtn.textContent = '🌐';
+            document.body.appendChild(popupBtn);
+
+            popupBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                triggerTranslation(selectedText, currentMouseX, currentMouseY);
+                hidePopupButton();
+            });
+
+            popupBtn.addEventListener('mouseleave', function() {
+                hideTimer = setTimeout(hidePopupButton, 300);
+            });
+            popupBtn.addEventListener('mouseenter', function() {
+                clearTimeout(hideTimer);
+            });
+        }
+
+        function showPopupButton(x, y) {
+            if (!popupBtn) createPopupButton();
+            popupBtn.style.display = 'flex';
+            popupBtn.style.left = (x + 8) + 'px';
+            popupBtn.style.top = (y - 16) + 'px';
+            clearTimeout(hideTimer);
+        }
+
+        function hidePopupButton() {
+            if (popupBtn) popupBtn.style.display = 'none';
+        }
+
+        // ---------- 悬浮卡片 ----------
+
+        function removeCard() {
+            if (cardTimeoutTimer) { clearTimeout(cardTimeoutTimer); cardTimeoutTimer = null; }
+            if (card) { card.remove(); card = null; }
+            cardScroll = null;
+            cardStatus = null;
+            cardBody = null;
+            cardPinned = false;
+        }
+
+        function showFloatingCard(x, y) {
+            removeCard();
+            cardAnchorX = x;
+            cardAnchorY = y;
+
+            card = document.createElement('div');
+            card.id = 'ds-translate-card';
+
+            cardScroll = document.createElement('div');
+            cardScroll.id = 'ds-translate-card-scroll';
+            card.appendChild(cardScroll);
+
+            cardStatus = document.createElement('div');
+            cardStatus.id = 'ds-translate-card-status';
+            cardStatus.innerHTML = '翻译中<span class="dots"></span>';
+            cardScroll.appendChild(cardStatus);
+
+            cardBody = document.createElement('div');
+            cardBody.id = 'ds-translate-card-body';
+            cardScroll.appendChild(cardBody);
+
+            const closeBtn = document.createElement('div');
+            closeBtn.id = 'ds-translate-card-close';
+            closeBtn.textContent = '✕';
+            closeBtn.title = '关闭卡片';
+            closeBtn.addEventListener('click', removeCard);
+            card.appendChild(closeBtn);
+
+            // 左上角拖动手柄：按住可把卡片拖到任意位置，拖后位置固定
+            const dragHandle = document.createElement('div');
+            dragHandle.id = 'ds-translate-card-drag';
+            dragHandle.textContent = '⠿';
+            dragHandle.title = '拖动卡片';
+            makeCardDraggable(dragHandle);
+            card.appendChild(dragHandle);
+
+            document.body.appendChild(card);
+            positionCard();
+
+            // 超时提示：60s 没有任何译文则提示检查登录状态
+            cardTimeoutTimer = setTimeout(function() {
+                if (cardStatus && cardBody && !cardBody.innerHTML) {
+                    cardStatus.textContent = '等待超时：请确认 DeepSeek 已登录';
+                }
+            }, 60000);
+        }
+
+        function makeCardDraggable(handle) {
+            handle.addEventListener('mousedown', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!card) return;
+                cardPinned = true;
+                const rect = card.getBoundingClientRect();
+                const dx = e.clientX - rect.left;
+                const dy = e.clientY - rect.top;
+
+                function onMove(ev) {
+                    if (!card) return cleanup();
+                    // 拖动时允许大部分移出屏幕，但保留可抓回来的边角
+                    let left = Math.min(Math.max(ev.clientX - dx, -rect.width + 48), window.innerWidth - 48);
+                    let top = Math.min(Math.max(ev.clientY - dy, 0), window.innerHeight - 48);
+                    card.style.left = left + 'px';
+                    card.style.top = top + 'px';
+                }
+                function cleanup() {
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', cleanup);
+                }
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', cleanup);
+            });
+        }
+
+        function positionCard() {
+            if (!card || cardPinned) return;
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const rect = card.getBoundingClientRect();
+
+            let left = cardAnchorX + CONFIG.offsetX;
+            if (left + rect.width > vw) {
+                left = cardAnchorX - CONFIG.offsetX - rect.width;
+            }
+            if (left < 0) left = 10;
+
+            let top = cardAnchorY + CONFIG.offsetY;
+            if (top + rect.height > vh) {
+                top = vh - rect.height - 10;
+            }
+            if (top < 0) top = 10;
+
+            card.style.left = left + 'px';
+            card.style.top = top + 'px';
+        }
+
+        // 接收工作标签页回传的流式译文
+        // 双通道：GM 存储跨标签通知（主） + postMessage（备）
+        let lastRelayTs = 0;
+
+        function handleRelay(d) {
+            if (!card) return;
+            if (d.ts) {
+                if (d.ts <= lastRelayTs) return;   // 丢弃重复/乱序消息
+                lastRelayTs = d.ts;
+            }
+
+            if (d.error) {
+                if (cardStatus) cardStatus.textContent = '出错了：' + d.error;
+                return;
+            }
+
+            if (typeof d.html === 'string' && cardBody) {
+                cardBody.innerHTML = d.html;
+                if (cardStatus) { cardStatus.remove(); cardStatus = null; }
+            }
+
+            if (d.done) {
+                if (cardTimeoutTimer) { clearTimeout(cardTimeoutTimer); cardTimeoutTimer = null; }
+                log('译文接收完成');
+            }
+
+            positionCard();
+            if (cardScroll) cardScroll.scrollTop = cardScroll.scrollHeight;
+        }
+
+        window.addEventListener('message', function(e) {
+            if (!e.origin || !e.origin.startsWith('https://chat.deepseek.com')) return;
+            const d = e.data;
+            if (!d || d.source !== RELAY_SOURCE) return;
+            handleRelay(d);
+        });
+
+        if (typeof GM_addValueChangeListener === 'function') {
+            GM_addValueChangeListener(RELAY_KEY, function(name, oldValue, newValue, remote) {
+                if (!remote) return;
+                try {
+                    const d = JSON.parse(newValue);
+                    if (d && d.source === RELAY_SOURCE) handleRelay(d);
+                } catch(e) {}
+            });
+        }
+
+        // ---------- 触发翻译 ----------
+
+        function triggerTranslation(text, mouseX, mouseY) {
+            if (!text || text.trim().length === 0) return;
+            if (text.trim().length > CONFIG.maxTextLength) {
+                alert(`选中的文本过长（超过 ${CONFIG.maxTextLength} 字符），请减少选择。`);
+                return;
+            }
+
+            const seq = Date.now();
+
+            // 1. 先把任务写进 GM 存储（工作页无论新旧都能拿到）
+            GM_setValue(TASK_KEY, JSON.stringify({
+                seq: seq,
+                text: text.trim(),
+                targetLang: CONFIG.targetLang
+            }));
+
+            showFloatingCard(mouseX, mouseY);
+            ensureWorkerTab(seq);
+        }
+
+        // 后台工作标签页：常驻复用，绝不以"窗口"形式出现。
+        // 浏览器对后台标签页从不冻结 JS（这是所有网页自动化依赖的
+        // 可靠行为），所以回传永远不会像离屏窗口那样卡死。
+        function ensureWorkerTab() {
+            if (workerWin && !workerWin.closed) {
+                // 工作页已存活，任务会通过 GM 存储通知它，无需任何操作
+                log('复用已有工作标签页');
+                return;
+            }
+            // 首次（或工作页被关闭后）打开：会短暂出现在前台加载，
+            // 之后常驻后台。window.open 无 features = 普通标签页。
+            log('打开新的工作标签页');
+            workerWin = window.open(CONFIG.deepseekUrl, CONFIG.workerName);
+        }
+
+        let mouseX = 0, mouseY = 0;
+        let showButtonTimer = null;
+
+        document.addEventListener('mouseup', function(e) {
+            const selection = window.getSelection();
+            const text = selection.toString().trim();
+            if (text.length > 0 && text.length <= CONFIG.maxTextLength) {
+                selectedText = text;
+                mouseX = e.clientX;
+                mouseY = e.clientY;
+                currentMouseX = mouseX;
+                currentMouseY = mouseY;
+                clearTimeout(showButtonTimer);
+                showButtonTimer = setTimeout(() => {
+                    if (window.getSelection().toString().trim() === text) {
+                        showPopupButton(mouseX, mouseY);
+                    }
+                }, CONFIG.buttonDelay);
+            } else {
+                hidePopupButton();
+            }
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            currentMouseX = e.clientX;
+            currentMouseY = e.clientY;
+        });
+
+        document.addEventListener('mousedown', function(e) {
+            if (popupBtn && !popupBtn.contains(e.target)) hidePopupButton();
+        });
+        document.addEventListener('scroll', hidePopupButton);
+
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+                const sel = window.getSelection().toString().trim();
+                if (sel) {
+                    e.preventDefault();
+                    triggerTranslation(sel, currentMouseX || window.innerWidth / 2, currentMouseY || window.innerHeight / 2);
+                }
+            }
+        });
+
+        createPopupButton();
+        log('普通网页部分已加载');
+
+    // ============================================================
+    //  DeepSeek 页面部分（后台工作标签页：自动发送 + 回传译文）
+    // ============================================================
+    } else {
+        // 标签页标题改成"翻译助手"，方便在标签栏里辨认、和普通 DS 页面区分
+        document.title = '🈯 翻译助手';
+
+        log('DeepSeek 工作标签页已加载');
+
+        let lastTaskSeq = 0;      // 已处理/已接收的最大任务序号
+        let busy = false;         // 当前是否有任务在跑
+        let queuedTask = null;    // 忙碌时到达的最新任务（只保留最新）
+        let lastActivity = Date.now();   // 最后活动时间（用于空闲自动关闭）
+        let relayStarted = false;
+
+        let lastHTML = '';
+        let lastChangeTime = 0;
+        let doneSent = false;
+        let tsSeq = Date.now();
+        let lastStorageWrite = 0;
+
+        // ---------- 任务接收 ----------
+
+        function acceptTask(task) {
+            if (!task || !task.seq || task.seq <= lastTaskSeq) return;   // 重复/过期任务
+            lastTaskSeq = task.seq;
+            lastActivity = Date.now();
+            if (busy) {
+                queuedTask = task;   // 忙碌时只保留最新任务
+                log('忙碌中，任务已排队', task.seq);
+            } else {
+                runTask(task);
+            }
+        }
+
+        function runTask(task) {
+            busy = true;
+            doneSent = false;
+            lastHTML = '';
+            lastChangeTime = Date.now();
+            lastActivity = Date.now();
+            log('开始翻译任务', task.seq);
+            startRelay();
+            autoTranslate(task.text, task.targetLang);
+        }
+
+        function finishTask() {
+            busy = false;
+            lastActivity = Date.now();
+            if (queuedTask) {
+                const t = queuedTask;
+                queuedTask = null;
+                setTimeout(() => acceptTask(t), 800);
+            }
+        }
+
+        // 页面加载时：读取可能已经写入的任务（首次划词后标签页才打开的场景）
+        try {
+            const raw = GM_getValue(TASK_KEY, null);
+            if (raw) {
+                const task = JSON.parse(raw);
+                // 60 秒内的任务才算数，更早的视为残渣
+                if (task && task.seq && Date.now() - task.seq < 60000) {
+                    acceptTask(task);
+                }
+            }
+        } catch(e) {
+            log('读取初始任务失败', e);
+        }
+
+        // 标签页常驻：监听后续任务（划词页直接写入，无需重开标签页）
+        if (typeof GM_addValueChangeListener === 'function') {
+            GM_addValueChangeListener(TASK_KEY, function(name, oldValue, newValue, remote) {
+                if (!remote) return;
+                try {
+                    acceptTask(JSON.parse(newValue));
+                } catch(e) {
+                    log('任务解析失败', e);
+                }
+            });
+        }
+
+        // 空闲自动关闭：3 分钟没有任务就自己关掉，保持标签栏干净
+        setInterval(() => {
+            if (!busy && lastTaskSeq && Date.now() - lastActivity > CONFIG.workerIdleCloseMs) {
+                log('空闲超时，自动关闭工作标签页');
+                try { window.close(); } catch(e) {}
+            }
+        }, 15000);
+
+        // ---------- 译文回传 ----------
+
+        function nextTs() {
+            tsSeq = Math.max(tsSeq + 1, Date.now());
+            return tsSeq;
+        }
+
+        // 双通道回传：1) GM 存储跨标签通知（主）；2) postMessage 给 opener（备）。
+        // 卡片端按时间戳去重，两条路谁先到用谁。
+        function relayMessage(payload) {
+            const full = Object.assign({ source: RELAY_SOURCE, ts: nextTs() }, payload);
+
+            // 通道1：GM 存储通知（流式期间限频 400ms，完成/出错立即写）
+            try {
+                const now = Date.now();
+                if (payload.done || payload.error || now - lastStorageWrite > 400) {
+                    lastStorageWrite = now;
+                    GM_setValue(RELAY_KEY, JSON.stringify(full));
+                }
+            } catch(e) {
+                log('GM 存储回传失败', e);
+            }
+
+            // 通道2：postMessage
+            try {
+                if (window.opener && !window.opener.closed) {
+                    window.opener.postMessage(full, '*');
+                }
+            } catch(e) {
+                log('postMessage 回传失败', e);
+            }
+        }
+
+        function relayError(msg) {
+            log('错误：' + msg);
+            relayMessage({ error: msg });
+        }
+
+        function startRelay() {
+            if (relayStarted) return;
+            relayStarted = true;
+
+            // 从所有 .ds-markdown 里挑出"最终译文"，排除思考过程：
+            // DeepSeek 的"已深度思考（用时 X 秒）"折叠条和思考内容共用
+            // 一个容器，最终译文在这个容器外面。找到该容器的最内层包裹，
+            // 排除其中的 markdown，取剩下的最后一条。
+            // 若结构对不上（官网改版）则退回旧行为：取最后一条。
+            function pickAnswerMarkdown() {
+                const outputs = document.querySelectorAll('.ds-markdown');
+                if (!outputs.length) return null;
+
+                let thinkWrap = null;
+                const hints = document.querySelectorAll('div,button,span');
+                for (const el of hints) {
+                    const t = (el.textContent || '').trim();
+                    // 提示条都是短文本，限制长度防止误伤正文里提到"思考"的段落
+                    if (t.length === 0 || t.length > 30) continue;
+                    if (!/已深度思考|思考过程|思考中|思考完毕|已搜索到|联网搜索/.test(t)) continue;
+
+                    // 从提示条向上找"最内层的、直接包含 .ds-markdown 的容器"
+                    let p = el.parentElement;
+                    while (p && p !== document.body) {
+                        if (p.querySelector('.ds-markdown')) {
+                            // 容器本身不能是 markdown（防止误伤正文），
+                            // 思考折叠条是独立于 markdown 的元素
+                            if (!p.matches('.ds-markdown')) thinkWrap = p;
+                            break;
+                        }
+                        p = p.parentElement;
+                    }
+                }
+
+                if (thinkWrap) {
+                    for (let i = outputs.length - 1; i >= 0; i--) {
+                        if (!thinkWrap.contains(outputs[i])) return outputs[i];
+                    }
+                    return null;   // 目前只有思考内容 → 不回传
+                }
+                return outputs[outputs.length - 1];
+            }
+
+            const mo = new MutationObserver(() => {
+                const answer = pickAnswerMarkdown();
+                if (!answer) return;
+                const html = answer.innerHTML;
+                if (html && html !== lastHTML) {
+                    lastHTML = html;
+                    lastChangeTime = Date.now();
+                    relayMessage({ html: lastHTML, done: false });
+                }
+            });
+            mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+
+            // 完成检测：内容停止变化超过 doneIdleMs 视为输出完毕。
+            // 注意：后台标签页的 setInterval 最多被钳到 1 秒一次，
+            // 只影响"完成"信号的延迟，不影响流式内容（靠 MutationObserver）。
+            setInterval(() => {
+                if (doneSent || !lastHTML) return;
+                if (Date.now() - lastChangeTime > CONFIG.doneIdleMs) {
+                    doneSent = true;
+                    relayMessage({ html: lastHTML, done: true });
+                    log('译文回传完毕');
+                    finishTask();
+                }
+            }, 300);
+        }
+
+        // ---------- 自动填充与发送 ----------
+
+        function autoTranslate(text, targetLang) {
+            const prompt = `仅输出${targetLang}译文：
+        """
+        ${text}
+        """
+
+        输出示例：
+        The translated text itself`;
+
+            log('提示词已构建');
+
+            function findInput() {
+                let input = document.querySelector('textarea[name="search"]');
+                if (input) return input;
+                input = document.querySelector('textarea.d96f2d2a');
+                if (input) return input;
+                input = document.querySelector('textarea');
+                return input;
+            }
+
+            function findSendButton() {
+                const candidates = document.querySelectorAll('div[role="button"]');
+                for (let btn of candidates) {
+                    const svg = btn.querySelector('svg');
+                    if (svg) {
+                        const path = svg.querySelector('path[d^="M8.3125"]');
+                        if (path) return btn;
+                    }
+                }
+                for (let btn of candidates) {
+                    if (!btn.classList.contains('ds-button--disabled')) return btn;
+                }
+                return null;
+            }
+
+            function fillInput(input, value) {
+                input.focus();
+                const nativeSetter = Object.getOwnPropertyDescriptor(
+                    HTMLTextAreaElement.prototype,
+                    'value'
+                ).set;
+                nativeSetter.call(input, value);
+                ['input', 'change', 'keydown', 'keyup'].forEach(type => {
+                    input.dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+                });
+                input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+                input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: value }));
+                log('输入框已填充');
+            }
+
+            function clickSendButton(btn, input) {
+                return new Promise((resolve) => {
+                    if (btn.classList.contains('ds-button--disabled')) {
+                        log('发送按钮禁用，等待启用...');
+                        const observer = new MutationObserver(() => {
+                            if (!btn.classList.contains('ds-button--disabled')) {
+                                observer.disconnect();
+                                btn.click();
+                                log('点击发送按钮');
+                                resolve();
+                            }
+                        });
+                        observer.observe(btn, { attributes: true, attributeFilter: ['class'] });
+                        setTimeout(() => {
+                            observer.disconnect();
+                            if (btn.classList.contains('ds-button--disabled')) {
+                                log('发送按钮超时未启用');
+                                relayError('DeepSeek 发送按钮未就绪，请重试');
+                                finishTask();
+                                resolve();
+                            }
+                        }, 5000);
+                    } else {
+                        btn.click();
+                        log('点击发送按钮');
+                        resolve();
+                    }
+                });
+            }
+
+            (async function() {
+                const newBtn = document.querySelector('button[aria-label="新对话"], button[aria-label="新建对话"], .new-chat-btn');
+                if (newBtn) newBtn.click();
+
+                await sleep(500);
+
+                const input = findInput();
+                if (!input) {
+                    // 不自动关闭：用户可能需要在这个标签页里登录 DeepSeek
+                    relayError('DeepSeek 页面未找到输入框，请点击"翻译助手"标签页确认已登录');
+                    finishTask();
+                    return;
+                }
+
+                fillInput(input, prompt);
+                await sleep(400);
+
+                const sendBtn = findSendButton();
+                if (sendBtn) {
+                    await clickSendButton(sendBtn, input);
+                } else {
+                    relayError('未找到发送按钮，请重试');
+                    finishTask();
+                }
+            })();
+        }
+
+        function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    }
+
+})();
