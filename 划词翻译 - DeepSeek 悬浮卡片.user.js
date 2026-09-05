@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 悬浮卡片
 // @namespace    http://tampermonkey.net/
-// @version      19.9.2
+// @version      19.9.3
 // @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
 // @author       YourName
 // @match        *://*/*
@@ -204,6 +204,7 @@
         let cardAnchorX = 0;
         let cardAnchorY = 0;
         let cardTimeoutTimer = null;
+        let relayPollTimer = null;   // GM 存储轮询定时器（卡片存在期间运行）
         let cardPinned = false;   // 用户拖动后位置固定，不再自动跟随
         let workerWin = null;     // 后台工作标签页引用
 
@@ -244,6 +245,7 @@
 
         function removeCard() {
             if (cardTimeoutTimer) { clearTimeout(cardTimeoutTimer); cardTimeoutTimer = null; }
+            if (relayPollTimer) { clearInterval(relayPollTimer); relayPollTimer = null; }
             if (card) { card.remove(); card = null; }
             cardScroll = null;
             cardStatus = null;
@@ -394,6 +396,24 @@
             });
         }
 
+        // 第三条通道：主动轮询 GM 存储。
+        // Tampermonkey 的跨标签值变更通知有同步延迟（后台任务多时可达数秒），
+        // 非 opener 页面又收不到 postMessage，只靠通知会卡顿。
+        // 卡片存在期间每 150ms 直接读一次最新值，前台定时器不受节流，
+        // 配合 handleRelay 的时间戳去重，与另两条通道互不冲突、谁先到用谁。
+        function startRelayPolling() {
+            if (relayPollTimer || typeof GM_getValue !== 'function') return;
+            relayPollTimer = setInterval(() => {
+                if (!card) return;
+                try {
+                    const raw = GM_getValue(RELAY_KEY, null);
+                    if (!raw) return;
+                    const d = JSON.parse(raw);
+                    if (d && d.source === RELAY_SOURCE) handleRelay(d);
+                } catch(e) {}
+            }, 150);
+        }
+
         // ---------- 触发翻译 ----------
 
         function triggerTranslation(text, mouseX, mouseY) {
@@ -413,6 +433,7 @@
             }));
 
             showFloatingCard(mouseX, mouseY);
+            startRelayPolling();
             ensureWorkerTab(seq);
         }
 
@@ -596,10 +617,10 @@
         function relayMessage(payload) {
             const full = Object.assign({ source: RELAY_SOURCE, ts: nextTs() }, payload);
 
-            // 通道1：GM 存储通知（流式期间限频 400ms，完成/出错立即写）
+            // 通道1：GM 存储通知（流式期间限频 200ms，完成/出错立即写）
             try {
                 const now = Date.now();
-                if (payload.done || payload.error || now - lastStorageWrite > 400) {
+                if (payload.done || payload.error || now - lastStorageWrite > 200) {
                     lastStorageWrite = now;
                     GM_setValue(RELAY_KEY, JSON.stringify(full));
                 }
