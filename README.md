@@ -1,6 +1,8 @@
 # 划词翻译 - DeepSeek 自动发送
 
-一个 Tampermonkey 油猴脚本：在任意网页**划词 → 点🌐（或 Ctrl+Shift+T）**，自动把选中文本发给 DeepSeek，只回传译文。
+> ⚡ 这是一个纯 **Vibe Coding** 项目——代码由 AI 生成，README 也不例外。
+
+一个 Tampermonkey 油猴脚本：在任意网页**划词 → 点🌐按钮**，自动把选中文本发给 DeepSeek，只回传译文。
 
 > 📦 GitHub 仓库：https://github.com/KniphH/deepseek-translate-userscript
 

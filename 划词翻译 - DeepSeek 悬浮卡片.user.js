@@ -461,16 +461,6 @@
         });
         document.addEventListener('scroll', hidePopupButton);
 
-        document.addEventListener('keydown', function(e) {
-            if (e.ctrlKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {
-                const sel = window.getSelection().toString().trim();
-                if (sel) {
-                    e.preventDefault();
-                    triggerTranslation(sel, currentMouseX || window.innerWidth / 2, currentMouseY || window.innerHeight / 2);
-                }
-            }
-        });
-
         createPopupButton();
         log('普通网页部分已加载');
 
