@@ -2,7 +2,14 @@
 
 一个 Tampermonkey 油猴脚本：在任意网页**划词 → 点🌐（或 Ctrl+Shift+T）**，自动把选中文本发给 DeepSeek，只回传译文。
 
+> 📦 GitHub 仓库：https://github.com/KniphH/deepseek-translate-userscript
+
 提供两个分支，任选其一安装（**不要同时启用**，划词按钮会重复）。
+
+## 一键下载
+
+- 🃏 悬浮卡片版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7847
+- 🪟 独立窗口版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7846
 
 ## 两个分支
 
@@ -43,29 +50,30 @@
 ## 安装
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/)
-2. 新建脚本，粘贴对应 `.user.js` 的完整内容（或直接拖入安装）
+2. 点上面的「一键下载」链接安装，或新建脚本粘贴对应 `.user.js` 的完整内容
 3. 确保浏览器已登录过 DeepSeek 网页版（免费额度即可）
 4. 若之前装过其他版本，请先停用
 
-
-## edit：
 ## 测试用例
-我之前用过划词翻译和沉浸式翻译，但是api要钱，而很多模型还有审查，翻译不动，而ds的审查就很低，所以试了下能不能薅网页版来当划词翻译用
 
-"""
+我之前用过划词翻译和沉浸式翻译，但是 API 要钱，而且很多模型审查重，遇到敏感一点的文本直接罢工翻不动。DeepSeek 的审查算是很低的，所以试着薅它的网页版来当免费的划词翻译用。下面是几个不同语言的测试段落，装好后随便划一段试试效果：
 
-こんなに大きなペニスを全部アナルに挿入するのは、本当にエロティックすぎる！～大好き♡～
+**英语（日常新闻体）**
 
-"""
+> The European Space Agency announced on Tuesday that its latest Earth-observation satellite has completed calibration and will begin transmitting high-resolution imagery next month. Researchers say the data could significantly improve wildfire tracking in remote regions, where detection delays often stretch from hours to days.
 
-"""
+**日语（生活口语）**
 
-皮広げられて唾入れられるの初めて見ましたがえっちすぎる…入れた後に指でなじませられるのもやばい これは動いてなくても出ちゃうの仕方がない 初音ミク好きなのでこんなえっちなの見つけれて最高です
+> 今朝は雨が降っていたので、傘を持って出かけたのに、昼頃にはすっかり晴れてしまって、鞄の中で邪魔になるだけだった。こういう天気の変化が多い季節は、毎日の予報チェックが本当に大事だと痛感する。
 
-"""
+**法语（文学描写）**
 
-"""
+> Le vieux libraire essuya ses lunettes avec un mouchoir de lin, regarda par la fenêtre la pluie qui dessinait de longues traînées argentées sur la vitre, et se rappela que, cinquante ans plus tôt, il avait ouvert cette boutique avec moins de cent livres et beaucoup trop d'espoir.
 
-帰宅直後の娘に手コキしてもらう
+**德语（技术文档风格）**
 
-"""
+> Der Installationsassistent erkennt automatisch alle verfügbaren Schnittstellen. Sollte eine Verbindung fehlschlagen, prüfen Sie zunächst die Treiberversion und starten Sie den Rechner neu, bevor Sie den Support kontaktieren.
+
+**俄语（新闻报道体）**
+
+> По данным местного метеорологического центра, температура в городе опустится ниже среднего значения на несколько градусов в течение ближайших суток, поэтому жителям рекомендуют одеваться теплее.
