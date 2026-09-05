@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 悬浮卡片
 // @namespace    http://tampermonkey.net/
-// @version      19.9.1
+// @version      19.9.2
 // @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
 // @author       YourName
 // @match        *://*/*
@@ -59,6 +59,9 @@
     const RELAY_SOURCE = 'ds-translate-card-relay';
     const TASK_KEY = 'ds_card_task';
     const RELAY_KEY = 'ds_card_relay';
+    const HEARTBEAT_KEY = 'ds_worker_heartbeat';
+    const HEARTBEAT_INTERVAL = 5000;   // 工作页心跳间隔
+    const HEARTBEAT_STALE = 12000;     // 超过此时长视为工作页已死亡
 
     function log(msg, data) {
         console.log(`[划词翻译-卡片] ${msg}`, data || '');
@@ -416,14 +419,33 @@
         // 后台工作标签页：常驻复用，绝不以"窗口"形式出现。
         // 浏览器对后台标签页从不冻结 JS（这是所有网页自动化依赖的
         // 可靠行为），所以回传永远不会像离屏窗口那样卡死。
+        function isWorkerAlive() {
+            // 工作页每 5 秒广播一次心跳（GM 存储是所有标签页共享的），
+            // 心跳新鲜 = 某个标签页（哪怕是别的页面开的）里工作页还活着
+            try {
+                const hb = GM_getValue(HEARTBEAT_KEY, 0);
+                return hb && (Date.now() - hb < HEARTBEAT_STALE);
+            } catch(e) {
+                return false;
+            }
+        }
+
         function ensureWorkerTab() {
             if (workerWin && !workerWin.closed) {
-                // 工作页已存活，任务会通过 GM 存储通知它，无需任何操作
-                log('复用已有工作标签页');
+                // 本页面自己开的工作页已存活，任务会通过 GM 存储通知它
+                log('复用本页工作标签页');
                 return;
             }
-            // 首次（或工作页被关闭后）打开：会短暂出现在前台加载，
-            // 之后常驻后台。window.open 无 features = 普通标签页。
+            if (isWorkerAlive()) {
+                // 别的页面打开的工作页还活着：任务照样通过 GM 存储下发，
+                // 它监听到后会翻译并回传，本页无需（也不能）重复开新页。
+                // （Chrome 的命名窗口只对同一个 opener 复用，跨标签页
+                // window.open 同名会开新标签，所以这里绝不能再 open）
+                log('检测到其他页面的工作标签页存活，直接复用');
+                return;
+            }
+            // 心跳已死（从未打开/被手动关闭/空闲自动关闭）：开新工作页。
+            // 首次会短暂出现在前台加载，之后常驻后台。
             log('打开新的工作标签页');
             workerWin = window.open(CONFIG.deepseekUrl, CONFIG.workerName);
         }
@@ -545,6 +567,14 @@
                 }
             });
         }
+
+        // 心跳广播：让所有划词页知道"工作页还活着"，从而跨标签页复用，
+        // 避免每个页面第一次划词都重复开一个新的 DS 标签页。
+        // 标签页关闭（手动或空闲自动关闭）后 setInterval 随之消亡，心跳自然停止。
+        try { GM_setValue(HEARTBEAT_KEY, Date.now()); } catch(e) {}
+        setInterval(() => {
+            try { GM_setValue(HEARTBEAT_KEY, Date.now()); } catch(e) {}
+        }, HEARTBEAT_INTERVAL);
 
         // 空闲自动关闭：3 分钟没有任务就自己关掉，保持标签栏干净
         setInterval(() => {
