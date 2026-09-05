@@ -10,6 +10,7 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
+// @license MIT
 // ==/UserScript==
 
 (function() {
@@ -187,6 +188,18 @@
             if (popupBtn && !popupBtn.contains(e.target)) hidePopupButton();
         });
         document.addEventListener('scroll', hidePopupButton);
+
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && (e.key === 'T' || e.key === 't')) {
+                const sel = window.getSelection().toString().trim();
+                if (sel) {
+                    e.preventDefault();
+                    const x = currentMouseX || window.innerWidth / 2;
+                    const y = currentMouseY || window.innerHeight / 2;
+                    openDeepSeekWindow(sel, x, y);
+                }
+            }
+        });
 
         createPopupButton();
         log('普通网页部分已加载');
