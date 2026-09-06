@@ -54,7 +54,7 @@
 
 ## 安装
 
-1. 安装 [Tampermonkey](https://www.tampermonkey.net/)
+1. 安装 [ScriptCat 脚本猫](https://scriptcat.org/)（目前脚本**只在 ScriptCat 发布**）或 [Tampermonkey](https://www.tampermonkey.net/)
 2. 点上面的「一键下载」链接安装，或新建脚本粘贴对应 `.user.js` 的完整内容
 3. 确保浏览器已登录过 DeepSeek 网页版（免费额度即可）
 4. 若之前装过其他版本，请先停用
