@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 自动发送
 // @namespace    http://tampermonkey.net/
-// @version      19.8
+// @version      19.8.1
 // @description  划词打开 DeepSeek 独立窗口（鼠标旁，自适应左右），自动填充发送，纯净视图只显示译文
 // @author       YourName
 // @match        *://*/*
@@ -77,7 +77,9 @@
             if (popupBtn) return;
             popupBtn = document.createElement('button');
             popupBtn.id = 'translate-popup-btn';
-            popupBtn.textContent = '🌐';
+            popupBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+            popupBtn.setAttribute('title', '翻译选中内容');
+            popupBtn.setAttribute('aria-label', '翻译选中内容');
             document.body.appendChild(popupBtn);
 
             popupBtn.addEventListener('click', function(e) {
