@@ -1,21 +1,21 @@
 # 划词翻译 - DeepSeek 自动发送
 
-> ⚡ 这是一个纯 **Vibe Coding** 项目——代码由 AI 生成，README 也不例外。
+> ◆ 这是一个纯 **Vibe Coding** 项目——代码由 AI 生成，README 也不例外。
 
 一个 Tampermonkey 油猴脚本：在任意网页**划词 → 点🌐按钮**，自动把选中文本发给 DeepSeek，只回传译文。
 
-> 📦 GitHub 仓库：https://github.com/KniphH/deepseek-translate-userscript
+> ► GitHub 仓库：https://github.com/KniphH/deepseek-translate-userscript
 
 提供两个分支，任选其一安装（**不要同时启用**，划词按钮会重复）。
 
 ## 一键下载
 
-- 🃏 悬浮卡片版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7847
-- 🪟 独立窗口版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7846
+- ▭ 悬浮卡片版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7847
+- ▣ 独立窗口版（ScriptCat）：https://scriptcat.org/zh-CN/script-show-page/7846
 
 ## 两个分支
 
-### 🪟 分支一：独立窗口版（`划词翻译 - DeepSeek 自动发送.user.js`，v19.8）
+### ▣ 分支一：独立窗口版（`划词翻译 - DeepSeek 自动发送.user.js`，v19.8.1）
 
 划词后弹出一个小窗口，自动填充发送，"纯净视图"只显示译文：
 
@@ -25,13 +25,13 @@
 - 窗口位置跟随鼠标，右侧空间不够自动换到左边
 - 局限：Chrome 强制弹出窗口显示地址栏（`location=no` 已被浏览器忽略）、强制最小窗口高度约 100px，均为浏览器安全限制，脚本无法突破
 
-### 🃏 分支二：悬浮卡片版（`划词翻译 - DeepSeek 悬浮卡片.user.js`，v19.9.4）
+### ▭ 分支二：悬浮卡片版（`划词翻译 - DeepSeek 悬浮卡片.user.js`，v19.9.5）
 
 划词后在**当前页面**直接弹出暗色悬浮卡片：
 
 - 卡片高度完全自适应（页面内元素不受浏览器最小窗口限制），上限 480px
-- 左上角 ⠿ 可拖动，拖后位置固定；右上角 ✕ 关闭
-- 翻译工作在后台标签页（标题"🈯 翻译助手"）中完成，**所有标签页共享同一工作页**（心跳检测存活，跨标签页复用）：每个浏览器会话只需打开一次，空闲 3 分钟自动关闭，下次划词自动重开
+- 左上角拖动手柄可拖动，拖后位置固定；右上角 ✕ 关闭
+- 翻译工作在后台标签页（标题"翻译助手"）中完成，**所有标签页共享同一工作页**（心跳检测存活，跨标签页复用）：每个浏览器会话只需打开一次，空闲 3 分钟自动关闭，下次划词自动重开
 - 已尝试过滤 DeepSeek 的"深度思考"过程，只回传最终译文
 
 ## 已知问题
