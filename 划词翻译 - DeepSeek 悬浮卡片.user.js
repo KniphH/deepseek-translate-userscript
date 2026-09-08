@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 悬浮卡片
 // @namespace    http://tampermonkey.net/
-// @version      19.9.5
+// @version      19.9.6
 // @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
 // @author       YourName
 // @match        *://*/*
@@ -212,7 +212,28 @@
             if (popupBtn) return;
             popupBtn = document.createElement('button');
             popupBtn.id = 'translate-popup-btn';
-            popupBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+            // 内联 SVG 地球图标。注意：必须用 createElementNS 构建，
+            // 不能用 innerHTML——YouTube 等站点开启了 Trusted Types
+            // 策略，innerHTML 赋值会被直接拦截抛错导致按钮创建失败。
+            const svgNS = 'http://www.w3.org/2000/svg';
+            const svg = document.createElementNS(svgNS, 'svg');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('width', '18');
+            svg.setAttribute('height', '18');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', '#fff');
+            svg.setAttribute('stroke-width', '2');
+            svg.setAttribute('stroke-linecap', 'round');
+            svg.setAttribute('stroke-linejoin', 'round');
+            svg.setAttribute('aria-hidden', 'true');
+            const c = document.createElementNS(svgNS, 'circle');
+            c.setAttribute('cx', '12'); c.setAttribute('cy', '12'); c.setAttribute('r', '10');
+            const l = document.createElementNS(svgNS, 'line');
+            l.setAttribute('x1', '2'); l.setAttribute('y1', '12'); l.setAttribute('x2', '22'); l.setAttribute('y2', '12');
+            const p = document.createElementNS(svgNS, 'path');
+            p.setAttribute('d', 'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z');
+            svg.appendChild(c); svg.appendChild(l); svg.appendChild(p);
+            popupBtn.appendChild(svg);
             popupBtn.setAttribute('title', '翻译选中内容');
             popupBtn.setAttribute('aria-label', '翻译选中内容');
             document.body.appendChild(popupBtn);
