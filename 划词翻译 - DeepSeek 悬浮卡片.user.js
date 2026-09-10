@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         划词翻译 - DeepSeek 悬浮卡片
 // @namespace    http://tampermonkey.net/
-// @version      19.9.6
+// @version      19.9.9
 // @description  划词后在当前页面弹出暗色悬浮卡片（高度完全自适应，最大480），后台标签页中的 DeepSeek 静默翻译并实时回传，无多余窗口
-// @author       YourName
+// @author       KniphH
+// @license      MIT
 // @match        *://*/*
 // @match        https://chat.deepseek.com/*
 // @grant        GM_addStyle
@@ -35,7 +36,7 @@
  *    - 工作页把流式译文通过 GM 存储跨标签通知 + postMessage 双通道
  *      实时回传给卡片；
  *    - 工作页空闲 3 分钟自动关闭，下次划词自动重开；
- *    - 卡片左上角 ⠿ 可拖动，拖后位置固定；✕ 关闭卡片。
+ *    - 卡片左上角握把可拖动，拖后位置固定；✕ 关闭卡片。
  */
 
 (function() {
@@ -47,7 +48,6 @@
         buttonDelay: 300,
         cardWidth: 320,
         cardMaxHeight: 480,
-        maxTextLength: 999999,
         offsetX: 20,   // 卡片水平偏移量（右侧空间不够则向左）
         offsetY: 20,   // 卡片垂直偏移量（始终向下）
         doneIdleMs: 1500,    // 输出停止多久判定为"完成"
@@ -65,6 +65,47 @@
 
     function log(msg, data) {
         console.log(`[划词翻译-卡片] ${msg}`, data || '');
+    }
+
+    // ============================================================
+    //  Trusted Types 兼容
+    //  YouTube / Google 系站点启用 require-trusted-types-for 后，
+    //  Element.innerHTML 等注入点只接受 TrustedHTML，直接赋字符串会
+    //  抛 TypeError（v19.9.6 之前在 TT 站点卡片会整个挂掉）。
+    //  这里先尝试创建直通策略；若站点 CSP 不允许（或浏览器不支持），
+    //  捕获异常并在写入时降级为纯文本——绝不抛错中断卡片。
+    // ============================================================
+    let ttPolicy = null;
+    let ttPolicyTried = false;
+
+    function getTTPolicy() {
+        if (ttPolicyTried) return ttPolicy;
+        ttPolicyTried = true;
+        try {
+            if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+                ttPolicy = window.trustedTypes.createPolicy(
+                    'dsTranslateCard' + Math.random().toString(36).slice(2, 8),
+                    { createHTML: function(s) { return s; } }
+                );
+            }
+        } catch(e) {
+            log('Trusted Types 策略创建失败，将降级为纯文本', e);
+            ttPolicy = null;
+        }
+        return ttPolicy;
+    }
+
+    function safeSetHTML(el, html, fallbackText) {
+        if (!el) return;
+        const policy = getTTPolicy();
+        try {
+            el.innerHTML = policy ? policy.createHTML(html) : html;
+        } catch(e) {
+            // TT 强制且策略不可用：退化为纯文本（去掉标签），保证不中断
+            el.textContent = (fallbackText != null && fallbackText !== '')
+                ? fallbackText
+                : String(html || '').replace(/<[^>]*>/g, '');
+        }
     }
 
     // ============================================================
@@ -290,7 +331,11 @@
 
             cardStatus = document.createElement('div');
             cardStatus.id = 'ds-translate-card-status';
-            cardStatus.innerHTML = '翻译中<span class="dots"></span>';
+            // 不用 innerHTML（TT 站点会抛错）：文本 + 独立 dots 节点
+            cardStatus.textContent = '翻译中';
+            const statusDots = document.createElement('span');
+            statusDots.className = 'dots';
+            cardStatus.appendChild(statusDots);
             cardScroll.appendChild(cardStatus);
 
             cardBody = document.createElement('div');
@@ -307,8 +352,27 @@
             // 左上角拖动手柄：按住可把卡片拖到任意位置，拖后位置固定
             const dragHandle = document.createElement('div');
             dragHandle.id = 'ds-translate-card-drag';
-            dragHandle.textContent = '⠿';
             dragHandle.title = '拖动卡片';
+            // 握把用 SVG 画六个圆点，替代 ⠿（U+283F）等可能在
+            // 部分系统缺失字形的字符，保证任何平台都能显示
+            const gripNS = 'http://www.w3.org/2000/svg';
+            const grip = document.createElementNS(gripNS, 'svg');
+            grip.setAttribute('viewBox', '0 0 16 16');
+            grip.setAttribute('width', '12');
+            grip.setAttribute('height', '12');
+            grip.setAttribute('fill', 'currentColor');
+            [4, 8, 12].forEach(function(cy) {
+                [5.5, 10.5].forEach(function(cx) {
+                    const dot = document.createElementNS(gripNS, 'circle');
+                    dot.setAttribute('cx', cx);
+                    dot.setAttribute('cy', cy);
+                    dot.setAttribute('r', '1.4');
+                    grip.appendChild(dot);
+                });
+            });
+            grip.style.display = 'block';
+            grip.style.margin = '6px auto 0';
+            dragHandle.appendChild(grip);
             makeCardDraggable(dragHandle);
             card.appendChild(dragHandle);
 
@@ -317,7 +381,7 @@
 
             // 超时提示：60s 没有任何译文则提示检查登录状态
             cardTimeoutTimer = setTimeout(function() {
-                if (cardStatus && cardBody && !cardBody.innerHTML) {
+                if (cardStatus && cardBody && !cardBody.firstChild) {
                     cardStatus.textContent = '等待超时：请确认 DeepSeek 已登录';
                 }
             }, 60000);
@@ -389,7 +453,8 @@
             }
 
             if (typeof d.html === 'string' && cardBody) {
-                cardBody.innerHTML = d.html;
+                // TT 安全写入：策略可用则渲染 HTML，否则降级为纯文本
+                safeSetHTML(cardBody, d.html, d.text);
                 if (cardStatus) { cardStatus.remove(); cardStatus = null; }
             }
 
@@ -442,10 +507,6 @@
 
         function triggerTranslation(text, mouseX, mouseY) {
             if (!text || text.trim().length === 0) return;
-            if (text.trim().length > CONFIG.maxTextLength) {
-                alert(`选中的文本过长（超过 ${CONFIG.maxTextLength} 字符），请减少选择。`);
-                return;
-            }
 
             const seq = Date.now();
 
@@ -458,7 +519,7 @@
 
             showFloatingCard(mouseX, mouseY);
             startRelayPolling();
-            ensureWorkerTab(seq);
+            ensureWorkerTab();
         }
 
         // 后台工作标签页：常驻复用，绝不以"窗口"形式出现。
@@ -501,7 +562,7 @@
         document.addEventListener('mouseup', function(e) {
             const selection = window.getSelection();
             const text = selection.toString().trim();
-            if (text.length > 0 && text.length <= CONFIG.maxTextLength) {
+            if (text.length > 0) {
                 selectedText = text;
                 mouseX = e.clientX;
                 mouseY = e.clientY;
@@ -536,7 +597,7 @@
     // ============================================================
     } else {
         // 标签页标题改成"翻译助手"，方便在标签栏里辨认、和普通 DS 页面区分
-        document.title = '🈯 翻译助手';
+        document.title = '翻译助手';
 
         log('DeepSeek 工作标签页已加载');
 
@@ -547,6 +608,10 @@
         let relayStarted = false;
 
         let lastHTML = '';
+        let lastText = '';         // 译文纯文本（TT 站点降级显示时用）
+        let thinkWrapCache = null; // "思考过程"容器缓存（每轮任务重置）
+        let baselineNode = null;   // 本轮开始时的最后一条回复（旧译文基线）
+        let baselineHTML = null;   // 该基线当时的内容快照
         let lastChangeTime = 0;
         let doneSent = false;
         let tsSeq = Date.now();
@@ -570,6 +635,14 @@
             busy = true;
             doneSent = false;
             lastHTML = '';
+            lastText = '';
+            thinkWrapCache = null;
+            // 基线：新任务开始时旧译文可能还留在 DOM 里，若不排除，第一帧
+            // 突变就会把上一轮结果当成新内容回传（卡片先显示上一次译文、
+            // 再跳成当前结果）。记录基线后，内容仍等于基线时一律忽略。
+            const outs = document.querySelectorAll('.ds-markdown');
+            baselineNode = outs.length ? outs[outs.length - 1] : null;
+            baselineHTML = baselineNode ? baselineNode.innerHTML : null;
             lastChangeTime = Date.now();
             lastActivity = Date.now();
             log('开始翻译任务', task.seq);
@@ -678,11 +751,7 @@
             // 一个容器，最终译文在这个容器外面。找到该容器的最内层包裹，
             // 排除其中的 markdown，取剩下的最后一条。
             // 若结构对不上（官网改版）则退回旧行为：取最后一条。
-            function pickAnswerMarkdown() {
-                const outputs = document.querySelectorAll('.ds-markdown');
-                if (!outputs.length) return null;
-
-                let thinkWrap = null;
+            function detectThinkWrap() {
                 const hints = document.querySelectorAll('div,button,span');
                 for (const el of hints) {
                     const t = (el.textContent || '').trim();
@@ -696,13 +765,29 @@
                         if (p.querySelector('.ds-markdown')) {
                             // 容器本身不能是 markdown（防止误伤正文），
                             // 思考折叠条是独立于 markdown 的元素
-                            if (!p.matches('.ds-markdown')) thinkWrap = p;
+                            if (!p.matches('.ds-markdown')) return p;
                             break;
                         }
                         p = p.parentElement;
                     }
                 }
+                return null;
+            }
 
+            // 性能：思考容器在一次回复内基本不变。找到后缓存复用，
+            // 避免每次 DOM 突变都做一次全页 textContent 扫描；每轮任务
+            // 开始时由 runTask 重置缓存。
+            function getThinkWrap() {
+                if (thinkWrapCache && thinkWrapCache.isConnected) return thinkWrapCache;
+                thinkWrapCache = detectThinkWrap();
+                return thinkWrapCache;
+            }
+
+            function pickAnswerMarkdown() {
+                const outputs = document.querySelectorAll('.ds-markdown');
+                if (!outputs.length) return null;
+
+                const thinkWrap = getThinkWrap();
                 if (thinkWrap) {
                     for (let i = outputs.length - 1; i >= 0; i--) {
                         if (!thinkWrap.contains(outputs[i])) return outputs[i];
@@ -712,16 +797,30 @@
                 return outputs[outputs.length - 1];
             }
 
-            const mo = new MutationObserver(() => {
-                const answer = pickAnswerMarkdown();
-                if (!answer) return;
-                const html = answer.innerHTML;
-                if (html && html !== lastHTML) {
-                    lastHTML = html;
-                    lastChangeTime = Date.now();
-                    relayMessage({ html: lastHTML, done: false });
-                }
-            });
+            // 防抖：流式输出期间 DOM 每秒突变几十次，若不合并会造成
+            // 高频全页扫描 + 高频写 GM 存储（后台标签页尤为明显）。
+            let relayScheduled = false;
+            function scheduleRelayCheck() {
+                if (relayScheduled) return;
+                relayScheduled = true;
+                setTimeout(function() {
+                    relayScheduled = false;
+                    const answer = pickAnswerMarkdown();
+                    if (!answer) return;
+                    const html = answer.innerHTML;
+                    if (!html) return;
+                    // 仍是上一轮遗留在 DOM 里的旧译文 → 忽略，等新内容出现
+                    if (answer === baselineNode && html === baselineHTML) return;
+                    if (html !== lastHTML) {
+                        lastHTML = html;
+                        lastText = answer.textContent || '';
+                        lastChangeTime = Date.now();
+                        relayMessage({ html: lastHTML, text: lastText, done: false });
+                    }
+                }, 120);
+            }
+
+            const mo = new MutationObserver(scheduleRelayCheck);
             mo.observe(document.body, { childList: true, subtree: true, characterData: true });
 
             // 完成检测：内容停止变化超过 doneIdleMs 视为输出完毕。
@@ -731,7 +830,7 @@
                 if (doneSent || !lastHTML) return;
                 if (Date.now() - lastChangeTime > CONFIG.doneIdleMs) {
                     doneSent = true;
-                    relayMessage({ html: lastHTML, done: true });
+                    relayMessage({ html: lastHTML, text: lastText, done: true });
                     log('译文回传完毕');
                     finishTask();
                 }
@@ -820,13 +919,28 @@
                 });
             }
 
+            // 轮询等待元素出现：后台标签页首次加载 / SPA 尚未渲染完时，输入框
+            // 会晚于脚本启动才就绪，固定 sleep 会误判"未找到输入框"而丢任务。
+            async function waitFor(fn, timeout) {
+                const start = Date.now();
+                while (Date.now() - start < timeout) {
+                    const el = fn();
+                    if (el) return el;
+                    await sleep(250);
+                }
+                return null;
+            }
+
             (async function() {
                 const newBtn = document.querySelector('button[aria-label="新对话"], button[aria-label="新建对话"], .new-chat-btn');
                 if (newBtn) newBtn.click();
 
-                await sleep(500);
+                await sleep(300);
 
-                const input = findInput();
+                const input = await waitFor(function() {
+                    const el = findInput();
+                    return (el && !el.disabled) ? el : null;
+                }, 15000);
                 if (!input) {
                     // 不自动关闭：用户可能需要在这个标签页里登录 DeepSeek
                     relayError('DeepSeek 页面未找到输入框，请点击"翻译助手"标签页确认已登录');
@@ -837,7 +951,7 @@
                 fillInput(input, prompt);
                 await sleep(400);
 
-                const sendBtn = findSendButton();
+                const sendBtn = await waitFor(findSendButton, 10000);
                 if (sendBtn) {
                     await clickSendButton(sendBtn, input);
                 } else {
